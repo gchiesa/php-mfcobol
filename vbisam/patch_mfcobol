@@ -1,0 +1,283 @@
+--- ../../vbisam/isbuild.c	2004-06-13 08:32:33.000000000 +0200
++++ isbuild.c	2008-08-22 13:48:06.000000000 +0200
+@@ -176,6 +176,13 @@
+ 	stint (MAX_NODE_LENGTH - 1, psVBFile [iHandle]->sDictNode.cNodeSize);
+ 	stint (1, psVBFile [iHandle]->sDictNode.cIndexCount);
+ 	stint (0x0704, psVBFile [iHandle]->sDictNode.cRFU2);
++
++/* -- GCHIESA START -- */
++#ifdef MFCOBOL
++	stint (0x0702, psVBFile [iHandle]->sDictNode.cRFU2);
++#endif
++/* -- GCHIESA STOP -- */
++
+ 	stint (iMinRowLength, psVBFile [iHandle]->sDictNode.cMinRowLength);
+ 	stquad (2, psVBFile [iHandle]->sDictNode.cNodeKeydesc);
+ 	stquad (0, psVBFile [iHandle]->sDictNode.cDataFree);
+--- ../../vbisam/isinternal.h	2004-06-16 12:53:55.000000000 +0200
++++ isinternal.h	2008-08-22 14:55:27.000000000 +0200
+@@ -55,6 +55,13 @@
+  *	Init import
+  *	
+  */
++
++/* --- GCHIESA START --- */             
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++/* --- GCHIESA STOP --- */             
++
+ #include	<stdio.h>
+ #include	<sys/types.h>
+ #include	<sys/stat.h>
+@@ -73,7 +80,7 @@
+ //  suppresses re-reading and writing wherever possible
+ #define	VB_CACHE_ON	1
+ #define	VB_CACHE_OFF	2
+-#define	VB_CACHE	VB_CACHE_ON
++#define	VB_CACHE	VB_CACHE_OFF
+ 
+ #ifdef	VB_ENDIAN
+ #undef	VB_ENDIAN
+@@ -107,6 +114,16 @@
+ # define	MAX_NODE_LENGTH	1024
+ # define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (INTSIZE + 2)) / (QUADSIZE + 1))
+ #endif	// ISAMMODE == 1
++
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL
++#undef MAX_NODE_LENGTH
++#undef MAX_KEYS_PER_NODE
++#define	MAX_NODE_LENGTH	512
++#define	MAX_KEYS_PER_NODE	((MAX_NODE_LENGTH - (INTSIZE + 2)) / (QUADSIZE + 1))
++#endif // MFCOBOL
++/* --- GCHIESA STOP --- */             
++ 
+ #define	SLOTS_PER_NODE	((MAX_NODE_LENGTH >> 2) - 1)	// Used in vbVarlenIO.c
+ 
+ #define	MAX_PATH_LENGTH	128
+--- ../../vbisam/vbDataIO.c	2004-06-12 00:16:16.000000000 +0200
++++ vbDataIO.c	2008-08-22 14:55:29.000000000 +0200
+@@ -41,6 +41,12 @@
+  */
+ #include	"isinternal.h"
+ 
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL
++#include	<assert.h>
++#endif
++/* --- GCHIESA STOP --- */             
++
+ /*
+  * Prototypes
+  */
+@@ -97,8 +103,39 @@
+ 	if (psVBFile [iHandle]->iOpenMode & ISVARLEN)
+ 		iRowLength += INTSIZE + QUADSIZE;
+ 	tOffset = iRowLength * (tRowNumber - 1);
++    
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL
++    
++    if(!(psVBFile [iHandle]->iOpenMode & ISVARLEN)) {
++        
++        tSoFar = tVBLseek (psVBFile [iHandle]->iDataHandle, tOffset, SEEK_SET);
++        
++        if(tSoFar != tOffset) {
++            
++            fprintf (stderr, "Failed to position to block %d!\n", tOffset);
++            assert (FALSE);
++            return(-1);
++            
++        }
++        
++        if(!tVBRead(psVBFile [iHandle]->iDataHandle, pcBuffer, iRowLength)) {
++            
++            fprintf (stderr, "Failed reading row with length %d\n", iRowLength);
++            assert(FALSE);
++            return (-1);
++        }
++        
++        cFooter[0] = pcBuffer[iRowLength-1];
++        goto MFCOBOL_fix;
++    }
++#endif
++/* --- GCHIESA STOP --- */             
++     
+ 	tBlockNumber = (tOffset / psVBFile [iHandle]->iNodeSize);
+ 	tOffset -= (tBlockNumber * psVBFile [iHandle]->iNodeSize);
++
++    
+ 	if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]))
+ 		return (EBADFILE);
+ 	// Read in the *MINIMUM* rowlength and store it into pcBuffer
+@@ -134,6 +171,13 @@
+ 		if (iVBBlockRead (iHandle, FALSE, tBlockNumber + 1, cVBNode [0]))
+ 			return (EBADFILE);
+ 	}
++    
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL
++MFCOBOL_fix:
++#endif 
++/* --- GCHIESA STOP --- */             
++     
+ 	isreclen = psVBFile [iHandle]->iMinRowLength;
+ 	*piDeletedRow = FALSE;
+ 	if (cFooter [0] == 0x00)
+@@ -154,7 +198,15 @@
+ #else	// ISAMMODE == 1
+ 			psVBFile [iHandle]->iVarlenSlot = *(cFooter + 1 + INTSIZE);
+ # if	MAX_NODE_LENGTH != 1024
++
++/* --- GCHIESA START --- */             
++#  ifndef MFCOBOL
++/* --- GCHIESA STOP --- */             
+ BAD NODE LENGTH
++/* --- GCHIESA START --- */             
++#  endif
++/* --- GCHIESA STOP --- */             
++
+ # endif	// MAX_NODE_LENGTH
+ #endif	// ISAMMODE == 1
+ 			*(cFooter + 1 + INTSIZE) = 0;
+@@ -243,6 +295,32 @@
+ 		iRowLength += INTSIZE + QUADSIZE;
+ 	}
+ 
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL     
++    if(!(psVBFile [iHandle]->iOpenMode & ISVARLEN)) {
++        
++        tSoFar = tVBLseek (psVBFile [iHandle]->iDataHandle, tOffset, SEEK_SET);
++        
++        if(tSoFar != tOffset) {
++            
++            fprintf (stderr, "Failed to position to block %d!\n", tOffset);
++            assert (FALSE);
++            return(-1);
++            
++        }
++        
++        if(!tVBWrite(psVBFile [iHandle]->iDataHandle, pcWriteBuffer, iRowLength)) {
++            
++            fprintf (stderr, "Failed writing row with length %d\n", iRowLength);
++            assert(FALSE);
++            return (-1);
++        }
++        
++        return(0);
++    }
++#endif    
++/* --- GCHIESA STOP --- */             
++        
+ 	tBlockNumber = (tOffset / psVBFile [iHandle]->iNodeSize);
+ 	tOffset -= (tBlockNumber * psVBFile [iHandle]->iNodeSize);
+ 	while (tSoFar < iRowLength)
+--- ../../vbisam/vbNodeMemIO.c	2004-06-16 12:53:56.000000000 +0200
++++ vbNodeMemIO.c	2008-08-22 14:50:35.000000000 +0200
+@@ -152,8 +152,17 @@
+ 		}
+ 		if (psKeydesc->iFlags & ISDUPS)
+ 		{
+-			psKey->tDupNumber = ldquad (pcNodePtr);
+-			pcNodePtr += QUADSIZE;
++
++/* --- GCHIESA START --- */
++#ifdef MFCOBOL
++            psKey->tDupNumber = ldint (pcNodePtr); // GCHIESA
++            pcNodePtr += INTSIZE; // GCHIESA
++#else            
++			psKey->tDupNumber = ldquad (pcNodePtr); // GCHIESA
++			pcNodePtr += QUADSIZE; // GCHIESA
++#endif            
++/* --- GCHIESA STOP --- */
++
+ 		}
+ 		else
+ 			psKey->tDupNumber = 0;
+@@ -333,11 +342,27 @@
+ 		}
+ 		if (psKeydesc->iFlags & ISDUPS)
+ 		{
+-			iKeyLen += QUADSIZE;
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL             
++            iKeyLen += INTSIZE; //GCHIESA
++#else
++			iKeyLen += QUADSIZE; //GCHIESA
++#endif
++/* --- GCHIESA STOP --- */
++
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL
++			// If the key is a duplicate and it's not first in node
++			if ((psKey->sFlags.iIsHigh) || (psKey != psTree->psKeyFirst && !memcmp (psKey->cKey, pcPrevKey, psKeydesc->iKeyLength)))
++				if (psKeydesc->iFlags & DCOMPRESS)
++                	iKeyLen = INTSIZE; // GCHIESA
++#else
+ 			// If the key is a duplicate and it's not first in node
+ 			if ((psKey->sFlags.iIsHigh) || (psKey != psTree->psKeyFirst && !memcmp (psKey->cKey, pcPrevKey, psKeydesc->iKeyLength)))
+ 				if (psKeydesc->iFlags & DCOMPRESS)
+-					iKeyLen = QUADSIZE;
++					iKeyLen = QUADSIZE; // GCHIESA
++#endif 
++/* --- GCHIESA STOP --- */             
+ 		}
+ 		iKeyLen += QUADSIZE;
+ 		// Split?
+@@ -390,8 +415,14 @@
+ 			*pcNodePtr++ = (psKey->tDupNumber >> 40) & 0xff;
+ 			*pcNodePtr++ = (psKey->tDupNumber >> 32) & 0xff;
+ #endif	// ISAMMODE == 1
+-			*pcNodePtr++ = (psKey->tDupNumber >> 24) & 0xff;
+-			*pcNodePtr++ = (psKey->tDupNumber >> 16) & 0xff;
++
++/* --- GCHIESA START --- */             
++#ifndef MFCOBOL
++			*pcNodePtr++ = (psKey->tDupNumber >> 24) & 0xff;  // GCHIESA
++			*pcNodePtr++ = (psKey->tDupNumber >> 16) & 0xff;  // GCHIESA
++#endif // MFCOBOL
++/* --- GCHIESA STOP --- */             
++
+ 			*pcNodePtr++ = (psKey->tDupNumber >> 8) & 0xff;
+ 			*pcNodePtr++ = psKey->tDupNumber & 0xff;
+ 		}
+@@ -462,8 +493,17 @@
+ 	iResult = iVBBlockRead (iHandle, TRUE, tNodeNumber, cVBNode [0]);
+ 	if (iResult)
+ 		return (iResult);
++
++/* --- GCHIESA START --- */             
++#ifdef MFCOBOL     
++	if (psKeydesc->iFlags & ISDUPS)
++        iDupsLength = INTSIZE; // GCHIESA
++#else
+ 	if (psKeydesc->iFlags & ISDUPS)
+-		iDupsLength = QUADSIZE;
++		iDupsLength = QUADSIZE; // GCHIESA
++#endif 
++/* --- GCHIESA STOP --- */             
++     
+ 	iLength = ldint (cVBNode [0]);
+ 	// Is there enough free space in the node for an insertion?
+ 	if (iMode == 1 && iLength + 3 + iKeyLength + iDupsLength + QUADSIZE >= psVBFile [iHandle]->iNodeSize)
+@@ -479,8 +519,17 @@
+ 	{
+ 		memmove (cVBNode [0] + iPosition + iKeyLength + iDupsLength + QUADSIZE, cVBNode [0] + iPosition, iLength - iPosition);
+ 		memcpy (cVBNode [0] + iPosition, psTree->psKeyList [iPosn]->cKey, iKeyLength);
++
++/* --- GCHIESA START --- */                      
++#ifdef MFCOBOL
+ 		if (psKeydesc->iFlags & ISDUPS)
+-			stquad (psTree->psKeyList [iPosn]->tDupNumber, cVBNode [0] + iPosition + iKeyLength);
++            stint(psTree->psKeyList [iPosn]->tDupNumber, cVBNode [0] + iPosition + iKeyLength); // GCHIESA
++#else
++        if (psKeydesc->iFlags & ISDUPS)
++			stquad (psTree->psKeyList [iPosn]->tDupNumber, cVBNode [0] + iPosition + iKeyLength); // GCHIESA
++#endif 
++/* --- GCHIESA STOP --- */             
++
+ 		stquad (psTree->psKeyList [iPosn]->tRowNode, cVBNode [0] + iPosition + iKeyLength + iDupsLength);
+ 	}
+ 	else
